@@ -132,12 +132,30 @@ const App = () => {
   useEffect(() => {
     const initializeFirebase = async () => {
       try {
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-        if (!Object.keys(firebaseConfig).length) {
-          throw new Error("Firebase config is missing. Please provide __firebase_config.");
+        // Lee la configuración de Firebase de las variables de entorno de Vite
+        // Asegúrate de que VITE_FIREBASE_CONFIG esté en tu archivo .env
+        const firebaseConfigString = import.meta.env.VITE_FIREBASE_CONFIG;
+        let firebaseConfig = {};
+        if (firebaseConfigString) {
+          try {
+            firebaseConfig = JSON.parse(firebaseConfigString);
+          } catch (parseError) {
+            throw new Error(`Invalid JSON in VITE_FIREBASE_CONFIG: ${parseError.message}`);
+          }
+        } else {
+          // Si VITE_FIREBASE_CONFIG no está definido, lanzamos un error explícito.
+          throw new Error("Firebase config (VITE_FIREBASE_CONFIG) is missing in environment variables.");
         }
+
+        // Lee el App ID de las variables de entorno de Vite
+        const appId = import.meta.env.VITE_APP_ID; // Usaremos este directamente
+        if (!appId) {
+            throw new Error("App ID (VITE_APP_ID) is missing in environment variables.");
+        }
+        
+        // Para el token de autenticación inicial, para despliegues fuera del Canvas,
+        // asumiremos signInAnonymously a menos que tengas un flujo de login específico.
+        const initialAuthToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN || '';
 
         const app = initializeApp(firebaseConfig);
         const firestoreDb = getFirestore(app);
@@ -147,9 +165,9 @@ const App = () => {
         setAuth(firebaseAuth);
 
         // Sign in user
-        if (typeof __initial_auth_token !== 'undefined') {
-          await signInWithCustomToken(firebaseAuth, __initial_auth_token);
-        } else {
+        if (initialAuthToken) { // Si hay un token explícito (ej. para un usuario de prueba fijo)
+          await signInWithCustomToken(firebaseAuth, initialAuthToken);
+        } else { // Si no hay token, usa autenticación anónima para que Firestore funcione
           await signInAnonymously(firebaseAuth);
         }
 
@@ -158,7 +176,7 @@ const App = () => {
             setUserId(user.uid);
             console.log("Firebase user ID:", user.uid);
           } else {
-            console.log("No Firebase user logged in.");
+            console.log("No Firebase user logged in, using anonymous or generated ID.");
             setUserId(crypto.randomUUID()); // Fallback for anonymous or unauthenticated
           }
           setLoading(false); // Authentication is ready
@@ -180,7 +198,18 @@ const App = () => {
       return; // Wait for Firebase to be initialized and user ID available
     }
 
-    const docRef = doc(db, `artifacts/${__app_id}/users/${userId}/studyPlan/current`);
+    // Usamos el appId leído de las variables de entorno para la ruta de Firestore
+    const currentAppId = import.meta.env.VITE_APP_ID;
+    if (!currentAppId) {
+        // Esto no debería ocurrir si la inicialización pasó, pero es una buena práctica.
+        console.error("VITE_APP_ID is unexpectedly missing when trying to fetch data.");
+        setError("Error: VITE_APP_ID is missing for Firestore path.");
+        setLoading(false);
+        return;
+    }
+
+    const docRef = doc(db, `artifacts/${currentAppId}/users/${userId}/studyPlan/current`);
+    
     const unsubscribe = onSnapshot(docRef, async (docSnap) => {
       if (docSnap.exists()) {
         // If document exists, load the saved data
@@ -222,7 +251,13 @@ const App = () => {
       setStudyPlanData(updatedPlan); // Optimistic UI update
 
       try {
-        const docRef = doc(db, `artifacts/${__app_id}/users/${userId}/studyPlan/current`);
+        const currentAppId = import.meta.env.VITE_APP_ID;
+        if (!currentAppId) {
+            console.error("VITE_APP_ID is unexpectedly missing when trying to update data.");
+            setError("Error: VITE_APP_ID is missing for Firestore path during update.");
+            return;
+        }
+        const docRef = doc(db, `artifacts/${currentAppId}/users/${userId}/studyPlan/current`);
         await setDoc(docRef, { plan: updatedPlan });
         console.log(`Day ${updatedPlan[weekIndex].days[dayIndex].day} completion status updated.`);
       } catch (e) {
@@ -248,7 +283,7 @@ const App = () => {
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
           <strong className="font-bold">Error:</strong>
           <span className="block sm:inline ml-2">{error}</span>
-          <p className="mt-2 text-sm">Asegúrate de que tus variables globales de Firebase estén configuradas correctamente.</p>
+          <p className="mt-2 text-sm">Asegúrate de que tus variables de entorno de Firebase estén configuradas correctamente en tu `.env` (para desarrollo local) y/o en la configuración de despliegue si usas CI/CD.</p>
         </div>
       </div>
     );
